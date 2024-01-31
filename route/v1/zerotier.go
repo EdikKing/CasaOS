@@ -81,30 +81,31 @@ func copyHeaders(destination, source http.Header) {
 }
 
 func CheckNetwork() {
+	logger.Info("start check network")
 	respBody, err := httper.ZTGet("/controller/network")
 	if err != nil {
-		fmt.Println(err)
+		logger.Error("get network error", zap.Error(err))
 		return
 	}
 	networkId := ""
 	address := ""
 	networkNames := gjson.ParseBytes(respBody).Array()
-
+	routers := ""
 	for _, v := range networkNames {
 		res, err := httper.ZTGet("/controller/network/" + v.Str)
 		if err != nil {
-			fmt.Println(err)
+			logger.Error("get network error", zap.Error(err))
 			return
 		}
-		fmt.Println(string(res))
 		name := gjson.GetBytes(res, "name").Str
 		if name == common.RANW_NAME {
-			fmt.Println(string(res))
 			networkId = gjson.GetBytes(res, "id").Str
+			routers = gjson.GetBytes(res, "routes.0.target").Str
 			break
 		}
 	}
-	ip, s, e, c := getZTIP()
+	ip, s, e, c := getZTIP(routers)
+	logger.Info("ip", zap.Any("ip", ip))
 	if len(networkId) == 0 {
 		if len(address) == 0 {
 			address = GetAddress()
@@ -113,7 +114,7 @@ func CheckNetwork() {
 	}
 	res, err := httper.ZTGet("/network")
 	if err != nil {
-		fmt.Println(err)
+		logger.Error("get network error", zap.Error(err))
 		return
 	}
 	joined := false
@@ -124,6 +125,7 @@ func CheckNetwork() {
 			break
 		}
 	}
+	logger.Info("joined", zap.Any("joined", joined))
 	if !joined {
 		JoinAndUpdateNet(address, networkId, ip)
 	}
@@ -131,18 +133,19 @@ func CheckNetwork() {
 func GetAddress() string {
 	nodeRes, err := httper.ZTGet("/status")
 	if err != nil {
-		fmt.Println(err)
+		logger.Error("get status error", zap.Error(err))
 		return ""
 	}
 	return gjson.GetBytes(nodeRes, "address").String()
 }
 func JoinAndUpdateNet(address, networkId, ip string) {
-	res, err := httper.ZTPost("/network/"+networkId, "")
+	logger.Info("start join network", zap.Any("ip", ip))
+	_, err := httper.ZTPost("/network/"+networkId, "")
 	if err != nil {
-		fmt.Println(err)
+		logger.Error(" get network error", zap.Error(err))
 		return
 	}
-	fmt.Println(string(res))
+
 	if len(address) == 0 {
 		address = GetAddress()
 	}
@@ -153,12 +156,11 @@ func JoinAndUpdateNet(address, networkId, ip string) {
 		  "` + ip + `"
 		]
 	  }`
-	r, err := httper.ZTPost("/controller/network/"+networkId+"/member/"+address, b)
+	_, err = httper.ZTPost("/controller/network/"+networkId+"/member/"+address, b)
 	if err != nil {
-		fmt.Println(err)
+		logger.Error("join network error", zap.Error(err))
 		return
 	}
-	fmt.Println(string(r))
 }
 func CreateNet(address, s, e, c string) string {
 	body := `{
@@ -203,11 +205,14 @@ func CreateNet(address, s, e, c string) string {
 		{
 		"type": "ACTION_ACCEPT"
 		}
-		]
+		],
+		"v6AssignMode": {
+			"rfc4193": true
+		   }
 		}`
 	createRes, err := httper.ZTPost("/controller/network/"+address+"______", body)
 	if err != nil {
-		fmt.Println(err)
+		logger.Error("post network error", zap.Error(err))
 		return ""
 	}
 	return gjson.GetBytes(createRes, "id").Str
@@ -216,14 +221,14 @@ func CreateNet(address, s, e, c string) string {
 func GetZTIPs() []gjson.Result {
 	res, err := httper.ZTGet("/network")
 	if err != nil {
-		fmt.Println(err)
+		logger.Error("get network error", zap.Error(err))
 		return []gjson.Result{}
 	}
 	a := gjson.GetBytes(res, "#.routes.0.target")
 	return a.Array()
 }
 
-func getZTIP() (ip, start, end, cidr string) {
+func getZTIP(routes string) (ip, start, end, cidr string) {
 	excluded := GetZTIPs()
 	cidrs := []string{
 		"10.147.11.0/24",
@@ -258,18 +263,23 @@ func getZTIP() (ip, start, end, cidr string) {
 		"172.30.0.0/16",
 	}
 	filteredCidrs := make([]string, 0)
-	for _, cidr := range cidrs {
-		isExcluded := false
-		for _, excludedIP := range excluded {
-			if cidr == excludedIP.Str {
-				isExcluded = true
-				break
+	if len(routes) > 0 {
+		filteredCidrs = append(filteredCidrs, routes)
+	} else {
+		for _, cidr := range cidrs {
+			isExcluded := false
+			for _, excludedIP := range excluded {
+				if cidr == excludedIP.Str {
+					isExcluded = true
+					break
+				}
+			}
+			if !isExcluded {
+				filteredCidrs = append(filteredCidrs, cidr)
 			}
 		}
-		if !isExcluded {
-			filteredCidrs = append(filteredCidrs, cidr)
-		}
 	}
+
 	rnd := rand.New(rand.NewSource(time.Now().UnixNano()))
 	ip = ""
 	if len(filteredCidrs) > 0 {
@@ -288,7 +298,9 @@ func getZTIP() (ip, start, end, cidr string) {
 		for i := range startIP {
 			endIP[i] |= ^ipNet.Mask[i]
 		}
+		startIP[3] = 1
 		start = startIP.String()
+		endIP[3] = 254
 		end = endIP.String()
 		ipt := ipNet
 		ipt.IP[3] = 1

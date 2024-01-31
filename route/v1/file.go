@@ -29,7 +29,7 @@ import (
 	model2 "github.com/IceWhaleTech/CasaOS/service/model"
 
 	"github.com/gin-gonic/gin"
-	uuid "github.com/satori/go.uuid"
+	"github.com/google/uuid"
 	"go.uber.org/zap"
 
 	"github.com/h2non/filetype"
@@ -480,6 +480,10 @@ func GetFileUpload(c *gin.Context) {
 	path := c.Query("path")
 	dirPath := ""
 	hash := file.GetHashByContent([]byte(fileName))
+	if file.Exists(path + "/" + relative) {
+		c.JSON(http.StatusConflict, model.Result{Success: http.StatusConflict, Message: common_err.GetMsg(common_err.FILE_ALREADY_EXISTS)})
+		return
+	}
 	tempDir := filepath.Join(path, ".temp", hash+strconv.Itoa(totalChunks)) + "/"
 	if fileName != relative {
 		dirPath = strings.TrimSuffix(relative, fileName)
@@ -577,12 +581,13 @@ func PostFileUpload(c *gin.Context) {
 				c.JSON(http.StatusInternalServerError, model.Result{Success: common_err.SERVICE_ERROR, Message: err.Error()})
 				return
 			}
+			go func() {
 
-			if err := file.RMDir(tempDir); err != nil {
-				logger.Error("error when trying to remove `"+tempDir+"`", zap.Error(err))
-				c.JSON(http.StatusInternalServerError, model.Result{Success: common_err.SERVICE_ERROR, Message: err.Error()})
-				return
-			}
+				time.Sleep(11 * time.Second)
+				if err := file.RMDir(tempDir); err != nil {
+					logger.Error("error when trying to remove `"+tempDir+"`", zap.Error(err))
+				}
+			}()
 		}
 	} else {
 		out, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE, 0o644)
@@ -710,7 +715,7 @@ func PostOperateFileOrDir(c *gin.Context) {
 	list.TotalSize = total
 	list.ProcessedSize = 0
 
-	uid := uuid.NewV4().String()
+	uid := uuid.NewString()
 	service.FileQueue.Store(uid, list)
 	service.OpStrArr = append(service.OpStrArr, uid)
 	if len(service.OpStrArr) == 1 {
@@ -918,7 +923,7 @@ func ConnectWebSocket(c *gin.Context) {
 	peerId := c.Query("peer")
 	writer := c.Writer
 	request := c.Request
-	key := uuid.NewV4().String()
+	key := uuid.NewString()
 	//peerModel := service.MyService.Peer().GetPeerByUserAgent(c.Request.UserAgent())
 	peerModel := model2.PeerDriveDBModel{}
 	name := service.GetName(request)

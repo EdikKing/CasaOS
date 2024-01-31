@@ -18,7 +18,6 @@ import (
 
 	util_http "github.com/IceWhaleTech/CasaOS-Common/utils/http"
 
-	"github.com/IceWhaleTech/CasaOS/codegen/message_bus"
 	"github.com/IceWhaleTech/CasaOS/common"
 	"github.com/IceWhaleTech/CasaOS/pkg/cache"
 	"github.com/IceWhaleTech/CasaOS/pkg/config"
@@ -48,6 +47,9 @@ var (
 	//go:embed api/casaos/openapi.yaml
 	_docYAML string
 
+	//go:embed build/sysroot/etc/casaos/casaos.conf.sample
+	_confSample string
+
 	configFlag  = flag.String("c", "", "config address")
 	dbFlag      = flag.String("db", "", "db path")
 	versionFlag = flag.Bool("v", false, "version")
@@ -63,7 +65,7 @@ func init() {
 	println("git commit:", commit)
 	println("build date:", date)
 
-	config.InitSetup(*configFlag)
+	config.InitSetup(*configFlag, _confSample)
 
 	logger.LogInit(config.AppInfo.LogPath, config.AppInfo.LogSaveName, config.AppInfo.LogFileExt)
 	if len(*dbFlag) == 0 {
@@ -106,10 +108,12 @@ func main() {
 
 	v2Router := route.InitV2Router()
 	v2DocRouter := route.InitV2DocRouter(_docHTML, _docYAML)
+	v3File := route.InitFile()
 	mux := &util_http.HandlerMultiplexer{
 		HandlerMap: map[string]http.Handler{
 			"v1":  v1Router,
 			"v2":  v2Router,
+			"v3":  v3File,
 			"doc": v2DocRouter,
 		},
 	}
@@ -143,6 +147,7 @@ func main() {
 		"/v1/test",
 		route.V2APIPath,
 		route.V2DocPath,
+		route.V3FilePath,
 	}
 	for _, apiPath := range routers {
 		err = service.MyService.Gateway().CreateRoute(&model.Route{
@@ -155,13 +160,10 @@ func main() {
 			panic(err)
 		}
 	}
-	var events []message_bus.EventType
-	events = append(events, message_bus.EventType{Name: "casaos:system:utilization", SourceID: common.SERVICENAME, PropertyTypeList: []message_bus.PropertyType{}})
-	events = append(events, message_bus.EventType{Name: "casaos:file:recover", SourceID: common.SERVICENAME, PropertyTypeList: []message_bus.PropertyType{}})
-	events = append(events, message_bus.EventType{Name: "casaos:file:operate", SourceID: common.SERVICENAME, PropertyTypeList: []message_bus.PropertyType{}})
+
 	// register at message bus
 	for i := 0; i < 10; i++ {
-		response, err := service.MyService.MessageBus().RegisterEventTypesWithResponse(context.Background(), events)
+		response, err := service.MyService.MessageBus().RegisterEventTypesWithResponse(context.Background(), common.EventTypes)
 		if err != nil {
 			logger.Error("error when trying to register one or more event types - some event type will not be discoverable", zap.Error(err))
 		}
